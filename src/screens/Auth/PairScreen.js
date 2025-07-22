@@ -1,114 +1,161 @@
-//DDUOGRAM/src/screens/Auth/PairScreen.js
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert } from 'react-native';
-import { doc, setDoc, getDoc, updateDoc } from 'firebase/firestore';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  Alert,
+  KeyboardAvoidingView,
+  ScrollView,
+  Platform,
+} from 'react-native';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../../firebase';
+import Ionicons from 'react-native-vector-icons/Ionicons'; // <-- bare native import
 
-function generatePairCode(length = 6) {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let code = '';
-  for (let i = 0; i < length; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
-  return code;
-}
+export default function LoginScreen({ navigation }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [secureText, setSecureText] = useState(true);
 
-export default function PairScreen({ navigation }) {
-  const [pairCode, setPairCode] = useState('');
-  const [myCode, setMyCode] = useState('');
-
-  //generate and store a new code
-  async function handleGenerateCode() {
-    const code = generatePairCode();
-    const user = auth.currentUser;
+  const checkPairStatus = async (user) => {
     try {
-      await setDoc(doc(db, 'pairs', code), { user1: user.uid, user2: '' });
-      //optional code in  user profile
-      await setDoc(doc(db, 'users', user.uid), { pairCode: code }, { merge: true });
-      setMyCode(code);
-      Alert.alert('Share this code with your partner!', code);
+      const userDocSnap = await getDoc(doc(db, 'users', user.uid));
+      if (userDocSnap.exists()) {
+        const data = userDocSnap.data();
+        if (data.pairCode) {
+          navigation.reset({ index: 0, routes: [{ name: 'Main' }] });
+        } else {
+          navigation.reset({ index: 0, routes: [{ name: 'Pair' }] });
+        }
+      } else {
+        navigation.reset({ index: 0, routes: [{ name: 'Pair' }] });
+      }
     } catch (err) {
-      Alert.alert('Error', err.message);
+      Alert.alert('Error', 'Unable to check pair status. ' + err.message);
     }
-  }
+  };
 
-  //join partner with code
-  async function handleJoin() {
-  const user = auth.currentUser;
-  if (!pairCode.trim()) {
-    Alert.alert('Error', 'Please enter a code');
-    return;
-  }
-  try {
-    const codeDoc = doc(db, 'pairs', pairCode.trim().toUpperCase());
-    const snap = await getDoc(codeDoc);
-    if (!snap.exists()) {
-      Alert.alert('Invalid Code', 'No such code found.');
+  const handleLogin = async () => {
+    if (!email || !password) {
+      Alert.alert('Missing fields', 'Enter email and password');
       return;
     }
-    const { user1, user2 } = snap.data();
+    try {
+      await signInWithEmailAndPassword(auth, email.trim(), password);
+      const user = auth.currentUser;
+      await checkPairStatus(user);
+    } catch (err) {
+      if (err.code === 'auth/user-not-found') {
+        Alert.alert('Login Failed', 'User does not exist. Please sign up first.');
+      } else if (err.code === 'auth/wrong-password') {
+        Alert.alert('Login Failed', 'Incorrect password.');
+      } else {
+        Alert.alert('Login Error', err.message);
+      }
+    }
+  };
 
-    // ADD THIS CHECK!
-    if (user1 === user.uid) {
-      Alert.alert('Cannot Pair', 'You cannot pair with your own code.');
+  const handleSignUp = async () => {
+    if (!email || !password) {
+      Alert.alert('Missing fields', 'Enter email and password to sign up.');
       return;
     }
-
-    if (user2) {
-      Alert.alert('Code In Use', 'This code already has two users.');
-      return;
+    try {
+      await createUserWithEmailAndPassword(auth, email.trim(), password);
+      const user = auth.currentUser;
+      await checkPairStatus(user);
+      Alert.alert('Sign Up Success', 'Account created and logged in!');
+    } catch (err) {
+      if (err.code === 'auth/email-already-in-use') {
+        Alert.alert('Sign Up Error', 'That email is already in use.');
+      } else if (err.code === 'auth/invalid-email') {
+        Alert.alert('Sign Up Error', 'That email address is invalid.');
+      } else if (err.code === 'auth/weak-password') {
+        Alert.alert('Sign Up Error', 'Password should be at least 6 characters.');
+      } else {
+        Alert.alert('Sign Up Error', err.message);
+      }
     }
-    await updateDoc(codeDoc, { user2: user.uid });
-    await setDoc(doc(db, 'users', user.uid), { pairCode: pairCode.trim().toUpperCase() }, { merge: true });
-    Alert.alert('Paired!', 'You are now connected.');
-    navigation.replace('Main');
-  } catch (err) {
-    Alert.alert('Error', err.message);
-  }
-}
+  };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Connect Your Duogram</Text>
-      <TouchableOpacity style={styles.button} onPress={handleGenerateCode}>
-        <Text style={styles.buttonText}>Generate My Pairing Code</Text>
-      </TouchableOpacity>
-      {myCode ? (
-        <Text style={styles.myCodeText}>Your Code: {myCode}</Text>
-      ) : null}
-      <TextInput
-        style={styles.input}
-        placeholder="Enter partner's code"
-        value={pairCode}
-        autoCapitalize="characters"
-        onChangeText={setPairCode}
-      />
-      <TouchableOpacity style={styles.button} onPress={handleJoin}>
-        <Text style={styles.buttonText}>Connect</Text>
-      </TouchableOpacity>
-            <TouchableOpacity
-        style={[styles.button, styles.secondaryButton]}
-        onPress={() => navigation.replace('Login')}
-      >
-        <Text style={styles.buttonText}>Go Back to Login</Text>
-      </TouchableOpacity>
+    <KeyboardAvoidingView
+      style={{ flex: 1 }}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+        <Text style={styles.title}>Duogram</Text>
 
-      <TouchableOpacity
-        style={[styles.button, styles.continueButton]}
-        onPress={() => navigation.replace('Main')}
-      >
-        <Text style={styles.buttonText}>Continue Without Pairing</Text>
-      </TouchableOpacity>
-    </View>
+        <TextInput
+          style={styles.input}
+          placeholder="Email"
+          autoCapitalize="none"
+          keyboardType="email-address"
+          value={email}
+          onChangeText={setEmail}
+        />
+
+        <View style={styles.passwordContainer}>
+          <TextInput
+            style={[styles.input, { flex: 1, marginBottom: 0, borderWidth: 0 }]}
+            placeholder="Password"
+            secureTextEntry={secureText}
+            value={password}
+            onChangeText={setPassword}
+          />
+          <TouchableOpacity onPress={() => setSecureText(!secureText)} style={styles.eyeIcon}>
+            <Ionicons name={secureText ? 'eye-off' : 'eye'} size={24} color="#888" />
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.buttonGroup}>
+          <TouchableOpacity style={styles.button} onPress={handleLogin}>
+            <Text style={styles.buttonText}>Log In</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.button, styles.signupButton]} onPress={handleSignUp}>
+            <Text style={styles.buttonText}>Sign Up</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
-
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', padding: 24, backgroundColor: '#fff' },
-  title: { fontSize: 28, fontWeight: 'bold', marginBottom: 24, textAlign: 'center' },
-  button: { backgroundColor: '#007AFF', padding: 16, borderRadius: 8, marginBottom: 16, alignItems: 'center' },
+  container: { flexGrow: 1, justifyContent: 'center', padding: 24, backgroundColor: '#fff' },
+  title: { fontSize: 36, fontWeight: 'bold', alignSelf: 'center', marginBottom: 40 },
+  input: {
+    borderWidth: 1,
+    borderColor: '#aaa',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+    fontSize: 16,
+  },
+  passwordContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#aaa',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    marginBottom: 16,
+  },
+  eyeIcon: {
+    paddingLeft: 8,
+  },
+  buttonGroup: { flexDirection: 'row', justifyContent: 'space-between' },
+  button: {
+    backgroundColor: '#007AFF',
+    padding: 15,
+    borderRadius: 8,
+    alignItems: 'center',
+    flex: 1,
+    marginHorizontal: 4,
+  },
+  signupButton: { backgroundColor: '#34C759' },
   buttonText: { color: '#fff', fontSize: 16 },
-  myCodeText: { fontSize: 22, color: '#007AFF', fontWeight: 'bold', textAlign: 'center', marginVertical: 8 },
-  input: { borderWidth: 1, borderColor: '#aaa', borderRadius: 8, padding: 12, marginBottom: 16 },
-  secondaryButton: { backgroundColor: '#aaa' },
-  continueButton: { backgroundColor: '#28a745'},
 });
