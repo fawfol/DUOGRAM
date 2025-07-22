@@ -17,10 +17,10 @@ import {
   ChannelProfile,
 } from 'react-native-agora';
 
-const APP_ID = 'appid';
+const APP_ID = '571671d190e542978abbcfc78d97';
 const CHANNEL_NAME = 'myduocall';
 const TOKEN =
-  'tokenid';
+  '007eJxTYCg3jp1y8to=o2yn1PE/tVYb2L/o3+ZWVuBwdTc0MzcMMXQ0iDV1MTI0twizSAxJTEpKTkt2dwixdJ8e0R9RkMgI8PLvYVMjAwQCOJzMuRWppTmJyfm5DAwAAB1/CCX';
 
 export default function CallScreen() {
   const [isJoined, setIsJoined] = useState(false);
