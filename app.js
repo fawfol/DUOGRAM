@@ -1,22 +1,12 @@
-import { Text, View, StyleSheet } from 'react-native';
+//DUOGRAM/App.js
+import React from 'react';
+import { NavigationContainer } from '@react-navigation/native';
+import AppNavigator from './src/navigation/AppNavigator';
 
 export default function App() {
   return (
-    <View style={styles.container}>
-      <Text style={styles.text}>Hello from DUOGRAM 👋</Text>
-    </View>
+    <NavigationContainer>
+      <AppNavigator />
+    </NavigationContainer>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#1a1a1a',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  text: {
-    fontSize: 24,
-    color: 'white',
-  },
-});
