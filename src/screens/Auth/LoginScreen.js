@@ -9,19 +9,22 @@ import {
   KeyboardAvoidingView,
   ScrollView,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../../firebase';
-import Ionicons from 'react-native-vector-icons/Ionicons'; // <-- bare native import
+import Ionicons from 'react-native-vector-icons/Ionicons';
 
 export default function LoginScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [secureText, setSecureText] = useState(true);
+  const [loading, setLoading] = useState(false); 
 
   const checkPairStatus = async (user) => {
     try {
+      setLoading(true);
       const userDocSnap = await getDoc(doc(db, 'users', user.uid));
       if (userDocSnap.exists()) {
         const data = userDocSnap.data();
@@ -35,6 +38,8 @@ export default function LoginScreen({ navigation }) {
       }
     } catch (err) {
       Alert.alert('Error', 'Unable to check pair status. ' + err.message);
+    } finally {
+      setLoading(false); 
     }
   };
 
@@ -43,9 +48,10 @@ export default function LoginScreen({ navigation }) {
       Alert.alert('Missing fields', 'Enter email and password');
       return;
     }
+    setLoading(true);
     try {
-      await signInWithEmailAndPassword(auth, email.trim(), password);
-      const user = auth.currentUser;
+      const userCredential = await signInWithEmailAndPassword(auth, email.trim(), password);
+      const user = userCredential.user;
       await checkPairStatus(user);
     } catch (err) {
       if (err.code === 'auth/user-not-found') {
@@ -55,6 +61,8 @@ export default function LoginScreen({ navigation }) {
       } else {
         Alert.alert('Login Error', err.message);
       }
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -63,9 +71,10 @@ export default function LoginScreen({ navigation }) {
       Alert.alert('Missing fields', 'Enter email and password to sign up.');
       return;
     }
+    setLoading(true); // Start loading
     try {
-      await createUserWithEmailAndPassword(auth, email.trim(), password);
-      const user = auth.currentUser;
+      const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      const user = userCredential.user;
       await checkPairStatus(user);
       Alert.alert('Sign Up Success', 'Account created and logged in!');
     } catch (err) {
@@ -78,6 +87,8 @@ export default function LoginScreen({ navigation }) {
       } else {
         Alert.alert('Sign Up Error', err.message);
       }
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -96,6 +107,7 @@ export default function LoginScreen({ navigation }) {
           keyboardType="email-address"
           value={email}
           onChangeText={setEmail}
+          editable={!loading} 
         />
 
         <View style={styles.passwordContainer}>
@@ -105,18 +117,27 @@ export default function LoginScreen({ navigation }) {
             secureTextEntry={secureText}
             value={password}
             onChangeText={setPassword}
+            editable={!loading}
           />
-          <TouchableOpacity onPress={() => setSecureText(!secureText)} style={styles.eyeIcon}>
+          <TouchableOpacity onPress={() => setSecureText(!secureText)} style={styles.eyeIcon} disabled={loading}> 
             <Ionicons name={secureText ? 'eye-off' : 'eye'} size={24} color="#888" />
           </TouchableOpacity>
         </View>
 
         <View style={styles.buttonGroup}>
-          <TouchableOpacity style={styles.button} onPress={handleLogin}>
-            <Text style={styles.buttonText}>Log In</Text>
+          <TouchableOpacity style={styles.button} onPress={handleLogin} disabled={loading}>
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.buttonText}>Log In</Text>
+            )}
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.button, styles.signupButton]} onPress={handleSignUp}>
-            <Text style={styles.buttonText}>Sign Up</Text>
+          <TouchableOpacity style={[styles.button, styles.signupButton]} onPress={handleSignUp} disabled={loading}>
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.buttonText}>Sign Up</Text>
+            )}
           </TouchableOpacity>
         </View>
       </ScrollView>
