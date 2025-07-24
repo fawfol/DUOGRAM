@@ -9,54 +9,66 @@ const { width: screenWidth } = Dimensions.get('window');
 export default function Trash({
   trashPictures,
   setTrashPictures,
-  pictures, // Passed to restore
-  setPictures, // Passed to restore
+  pictures,
+  setPictures,
   selectionMode,
   setSelectionMode,
   selectedImages,
   setSelectedImages,
-  handleToggleSelection, // Modified prop name for clarity
+  handleToggleSelection,
   setModalVisible,
-  setCurrentImage,
+  setCurrentImage, 
   modalVisible,
   currentImage,
-  handleRestoreSelected, // The actual restore function from functions/
-  handlePermanentDelete, // The actual permanent delete function from functions/
+  handleRestoreSelected,
+  handlePermanentDelete,
 }) {
   const numColumns = 3;
   const itemPadding = 5;
+
   const mainContentPaddingHorizontal = 16;
   const effectiveContentWidth = screenWidth - mainContentPaddingHorizontal * 2;
   const itemSize = (effectiveContentWidth - (numColumns - 1) * itemPadding) / numColumns;
 
-  // Local wrappers for the functions to pass necessary args
   const onRestoreSelected = () => {
+    console.log('Attempting to restore selected images...');
     handleRestoreSelected(selectedImages, trashPictures, setTrashPictures, pictures, setPictures, setSelectedImages, setSelectionMode);
   };
 
   const onPermanentDelete = () => {
+    console.log('Attempting permanent delete of selected images...');
     handlePermanentDelete(selectedImages, trashPictures, setTrashPictures, setSelectedImages, setSelectionMode);
   };
 
   const handlePressItem = (item) => {
-    // Re-using the handlePress from functions, but pass current component's state
-    // Note: handlePress expects toggleImageSelection, setModalVisible, setCurrentImage
-    // We are directly calling it with the props from GalleryScreen
+    console.log('Item pressed in Trash:', item.id);
     if (selectionMode) {
-        handleToggleSelection(item.id); // This already handles selection logic
+      handleToggleSelection(item.id);
     } else {
-        setCurrentImage(item);
-        setModalVisible(true);
+      setCurrentImage(item);
+      setModalVisible(true);
+      console.log('Modal will open for image:', item.id, 'URI:', item.uri);
     }
   };
 
   const handleLongPressItem = (item) => {
-    // Re-using handleLongPress from functions, but pass current component's state
-    // Note: handleLongPress expects setSelectionMode, toggleImageSelection
-    // We are directly calling it with the props from GalleryScreen
-    setSelectionMode(true); // Ensure selection mode is active
-    handleToggleSelection(item.id); // This already handles selection logic
+    console.log('Item long pressed in Trash:', item.id);
+    setSelectionMode(true);
+    handleToggleSelection(item.id); 
   };
+
+  React.useEffect(() => {
+    if (modalVisible) {
+      console.log('Modal became visible. currentImage state:', currentImage);
+      if (currentImage && !currentImage.uri) {
+        console.warn('Modal: currentImage object exists but has no URI property!', currentImage);
+      } else if (!currentImage) {
+        console.warn('Modal: currentImage is null or undefined when modalVisible is true!');
+      }
+    } else {
+      console.log('Modal became hidden.');
+    }
+  }, [modalVisible, currentImage]);
 
 
   return (
@@ -66,12 +78,12 @@ export default function Trash({
         {selectionMode && Object.keys(selectedImages).length > 0 ? (
           <View style={styles.trashActionButtons}>
             <TouchableOpacity
-              style={styles.actionButton}
+              style={[styles.actionButton, { marginRight: 15 }]}
               onPress={onRestoreSelected}
               activeOpacity={0.7}
             >
               <Icon name="restore" size={25} color="#27ae60" />
-              <Text style={styles.actionButtonText}>
+              <Text style={[styles.actionButtonText, { color: '#27ae60' }]}>
                 Restore ({Object.keys(selectedImages).length})
               </Text>
             </TouchableOpacity>
@@ -81,7 +93,9 @@ export default function Trash({
               activeOpacity={0.7}
             >
               <Icon name="delete-forever" size={25} color="#e74c3c" />
-              <Text style={styles.actionButtonText}>Delete Permanently</Text>
+              <Text style={[styles.actionButtonText, { color: '#e74c3c' }]}>
+                Delete Permanently
+              </Text>
             </TouchableOpacity>
           </View>
         ) : (
@@ -98,8 +112,8 @@ export default function Trash({
         numColumns={numColumns}
         renderItem={({ item }) => (
           <TouchableOpacity
-            onPress={() => handlePressItem(item)} // Use local handler
-            onLongPress={() => handleLongPressItem(item)} // Use local handler
+            onPress={() => handlePressItem(item)}
+            onLongPress={() => handleLongPressItem(item)}
             activeOpacity={0.8}
             style={[
               styles.imageWrapper,
@@ -111,7 +125,11 @@ export default function Trash({
               selectedImages[item.id] && styles.imageSelected,
             ]}
           >
-            <Image source={{ uri: item.uri }} style={styles.image} />
+            <Image
+              source={{ uri: item.uri }}
+              style={styles.image}
+              onError={(e) => console.log(`Error loading image ${item.id}:`, e.nativeEvent.error, 'URI:', item.uri)}
+            />
             {selectionMode && selectedImages[item.id] && (
               <View style={styles.selectionOverlay}>
                 <Icon name="check-circle" size={30} color="#3498db" />
@@ -129,40 +147,7 @@ export default function Trash({
         )}
       />
 
-      {/* Full-screen image modal for trash items */}
-      <Modal
-        animationType="fade"
-        transparent={true}
-        visible={modalVisible}
-        onRequestClose={() => {
-          setModalVisible(!modalVisible);
-          setCurrentImage(null);
-        }}
-      >
-        <View style={styles.fullScreenImageContainer}>
-          <TouchableOpacity
-            style={styles.closeButton}
-            onPress={() => {
-              setModalVisible(false);
-              setCurrentImage(null);
-            }}
-          >
-            <Icon name="close-circle" size={30} color="#fff" />
-          </TouchableOpacity>
-          {currentImage && (
-            <Image
-              source={{ uri: currentImage.uri }}
-              style={styles.fullScreenImage}
-              resizeMode="contain"
-            />
-          )}
-          {currentImage && (
-            <Text style={styles.fullScreenImageTitle}>
-              {currentImage.title}
-            </Text>
-          )}
-        </View>
-      </Modal>
+     
     </View>
   );
 }
@@ -170,6 +155,7 @@ export default function Trash({
 const styles = StyleSheet.create({
   contentSection: {
     flex: 1,
+    paddingHorizontal: 16,
   },
   sectionTitle: {
     fontSize: 24,
@@ -198,7 +184,6 @@ const styles = StyleSheet.create({
     marginHorizontal: 5,
   },
   actionButtonText: {
-    color: '#e74c3c', // Default red for delete
     fontWeight: 'bold',
     fontSize: 16,
     marginLeft: 6,
@@ -216,8 +201,8 @@ const styles = StyleSheet.create({
     marginLeft: 5,
   },
   imageGrid: {
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: 'flex-start',
+    // alignItems: 'center',
     paddingBottom: 20,
     flexGrow: 1,
   },
@@ -272,7 +257,7 @@ const styles = StyleSheet.create({
   },
   fullScreenImage: {
     width: '100%',
-    height: '80%',
+    height: '100%',
   },
   closeButton: {
     position: 'absolute',
@@ -285,5 +270,12 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
     marginTop: 10,
+    // Add some padding to prevent text from touching screen edges
+    paddingHorizontal: 20,
+    textAlign: 'center',
   },
+  loadingText: {
+    color: 'white',
+    fontSize: 18,
+  }
 });

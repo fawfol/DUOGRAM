@@ -1,5 +1,5 @@
-// GalleryScreen.js
-import React, { useState, useCallback } from 'react';
+// src/screens/Tabs/GalleryScreen/GalleryScreen.js
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -11,48 +11,42 @@ import {
   Image,
   Platform,
   Modal,
+  Alert,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import LinearGradient from 'react-native-linear-gradient';
 
-// Import the externalized functions
+import { auth, db } from '../../../firebase';
+import { doc, getDoc } from 'firebase/firestore';
+
 import {
-  toggleImageSelection,
-  handleLongPress,
-  handlePress,
-  handleDeleteSelected,
-  handleRestoreSelected,
-  handlePermanentDelete,
-  sortImagesByDate,
+  subscribeToGallery,
+  uploadImageToFirebase,
+  downloadPartnerImageIfNeeded,
 } from './functions/galleryFunctions';
-import Albums from './Album';
-import Stories from './Stories';
-import Trash from './Trash'; // Import the Trash component
+
+// Image picker and file system imports
+import { launchImageLibrary } from 'react-native-image-picker';
+import RNFS from 'react-native-fs';
+
+// Import your dedicated screens
+import AlbumScreen from './Album';
+import StoriesScreen from './Stories';
+import TrashScreen from './Trash';
 
 const { width: screenWidth } = Dimensions.get('window');
 
-// Initial dummy pictures - now includes dateAdded
-const initialDummyPictures = Array.from({ length: 30 }, (_, i) => {
-  const now = new Date();
-  // Generate dates within a reasonable past range (e.g., last 30 days)
-  now.setMinutes(now.getMinutes() - Math.floor(Math.random() * 60 * 24 * 30));
-  return {
-    id: String(i),
-    uri: `https://picsum.photos/seed/${i + 100}/200/200`,
-    title: `Image ${i + 1}`,
-    dateAdded: now.toISOString(), // Store as ISO string for consistent comparison
-  };
-});
-
 export default function GalleryScreen() {
   const [activeScreen, setActiveScreen] = useState('pictures');
+  const [pairCode, setPairCode] = useState(null);
+  const [galleryPhotos, setGalleryPhotos] = useState([])
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedImages, setSelectedImages] = useState({});
   const [modalVisible, setModalVisible] = useState(false);
   const [currentImage, setCurrentImage] = useState(null);
-  //initialize pictures with sorted data
-  const [pictures, setPictures] = useState(sortImagesByDate(initialDummyPictures));
-  const [trashPictures, setTrashPictures] = useState([]);
+  const [errorImages, setErrorImages] = useState({});
 
+  const user = auth.currentUser;
   const navItems = [
     { name: 'pictures', label: 'Pictures', icon: 'image' },
     { name: 'albums', label: 'Albums', icon: 'folder-multiple-image' },
@@ -60,32 +54,112 @@ export default function GalleryScreen() {
     { name: 'trash', label: 'Trash', icon: 'delete' },
   ];
 
-  //memoized handlers using useCallback to prevent unnecessary re-renders
-  //th dependencies ensure the functions are recreated only when the values they close over change
+  // Fetch pair code for current user on mount
+  useEffect(() => {
+    async function fetchPairCode() {
+      if (!user) return;
+      const userDoc = await getDoc(doc(db, 'users', user.uid));
+      if (userDoc.exists()) {
+        setPairCode(userDoc.data().pairCode);
+      L} else {
+        setPairCode(null);
+      }
+    }
+    fetchPairCode();
+  }, [user]);
 
-  const handleToggleSelection = useCallback((imageId) =>
-    toggleImageSelection(imageId, selectedImages, setSelectedImages, setSelectionMode),
-    [selectedImages, setSelectedImages, setSelectionMode]
-  );
+  // Subscribe to Firestore gallery updates
+  useEffect(() => {
+    if (!pairCode) return;
+    const unsubscribe = subscribeToGallery(pairCode, setGalleryPhotos);
+    return () => unsubscribe();
+  }, [pairCode]);
 
-  const handleImageLongPress = useCallback((item) =>
-    handleLongPress(item, setSelectionMode, selectedImages, setSelectedImages),
-    [setSelectionMode, selectedImages, setSelectedImages]
-  );
+  // Automatically download partner images if needed
+  useEffect(() => {
+    if (!pairCode || !user) return;
 
+    galleryPhotos.forEach(photo => {
+      if (photo.uploadedBy !== user.uid) {
+        downloadPartnerImageIfNeeded(photo, pairCode, user.uid).catch(err => {
+          console.warn('Error downloading partner image:', err);
+        });
+      }
+    });
+  }, [galleryPhotos, pairCode, user]);
 
-  const handleImagePress = useCallback((item) =>
-    handlePress(item, selectionMode, handleToggleSelection, setModalVisible, setCurrentImage, selectedImages, setSelectedImages, setSelectionMode),
-    [selectionMode, handleToggleSelection, setModalVisible, setCurrentImage, selectedImages, setSelectedImages, setSelectionMode]
-  );
+  // Utility: Get local uri or fallback to cloud URL for image source
+  const getImageUri = (photo) => {
+    const localPath = `${RNFS.DocumentDirectoryPath}/${photo.imageId}.jpg`;
+    return `file://${localPath}`;
+  };
 
-  const handleDelete = useCallback(() =>
-    handleDeleteSelected(selectedImages, pictures, setPictures, trashPictures, setTrashPictures, setSelectedImages, setSelectionMode),
-    [selectedImages, pictures, setPictures, trashPictures, setTrashPictures, setSelectedImages, setSelectionMode]
-  );
+  // Toggle selection for multi-select mode
+  const toggleImageSelection = useCallback((imageId) => {
+    setSelectedImages(prev => {
+      const newSelection = { ...prev };
+      if (newSelection[imageId]) {
+        delete newSelection[imageId];
+      } else {
+        newSelection[imageId] = true;
+      }
+      if (Object.keys(newSelection).length === 0) setSelectionMode(false);
+      else setSelectionMode(true);
+      return newSelection;
+    });
+  }, []);
 
-  //reusable component for rendering the picture grid flatList
-  const renderPictureGrid = useCallback((data, emptyMessage) => {
+  // Handle image press (select or modal)
+  const handleImagePress = useCallback((item) => {
+    if (selectionMode) {
+      toggleImageSelection(item.id);
+    } else {
+      setCurrentImage(item);
+      setModalVisible(true);
+    }
+  }, [selectionMode, toggleImageSelection]);
+
+  // Handle long press (enable selection mode)
+  const handleImageLongPress = useCallback((item) => {
+    if (!selectedImages[item.id]) {
+      setSelectionMode(true);
+      setSelectedImages(prev => ({ ...prev, [item.id]: true }));
+    }
+  }, [selectedImages]);
+
+  // Handle add photo button press - pick and upload
+  const handleAddPhoto = async () => {
+    if (!pairCode || !user) {
+      Alert.alert('Pair Code Missing', 'Please connect with your partner to use the gallery.');
+      return;
+    }
+
+    try {
+      const res = await launchImageLibrary({
+        mediaType: 'photo',
+        quality: 0.8,
+      });
+
+      if (res.didCancel) return;
+
+      if (res.assets && res.assets.length > 0) {
+        const { uri } = res.assets[0];
+        if (!uri) {
+          Alert.alert('Error', 'Failed to get image URI');
+          return;
+        }
+        await uploadImageToFirebase(uri, pairCode, user.uid);
+      }
+    } catch (error) {
+      console.error('Add photo error:', error);
+      Alert.alert('Error', 'Failed to add photo. Please try again.');
+    }
+  };
+
+  // Render single photo square for FlatList (only for Pictures tab)
+  const renderPhotoItem = ({ item }) => {
+    const localURI = getImageUri(item);
+    const isError = errorImages[item.id];
     const numColumns = 3;
     const itemPadding = 5;
     const mainContentPaddingHorizontal = 16;
@@ -93,48 +167,50 @@ export default function GalleryScreen() {
     const itemSize = (effectiveContentWidth - (numColumns - 1) * itemPadding) / numColumns;
 
     return (
-      <FlatList
-        data={data}
-        keyExtractor={(item) => item.id}
-        numColumns={numColumns}
-        renderItem={({ item }) => (
-          <TouchableOpacity
-            onPress={() => handleImagePress(item)}
-            onLongPress={() => handleImageLongPress(item)}
-            activeOpacity={0.8}
-            style={[
-              styles.imageWrapper,
-              {
-                width: itemSize,
-                height: itemSize,
-                margin: itemPadding / 2,
-              },
-              selectedImages[item.id] && styles.imageSelected,
-            ]}
+      <TouchableOpacity
+        onPress={() => handleImagePress(item)}
+        onLongPress={() => handleImageLongPress(item)}
+        activeOpacity={0.7}
+        style={[
+          styles.imageWrapper,
+          {
+            width: itemSize,
+            height: itemSize,
+            margin: itemPadding / 2,
+          },
+          selectedImages[item.id] && styles.imageSelected,
+        ]}
+      >
+        {isError ? (
+          <LinearGradient
+            colors={['#d3d3d3', '#a1a1a1']}
+            style={[styles.image, styles.fallbackGradient]}
           >
-            <Image source={{ uri: item.uri }} style={styles.image} />
-            {selectionMode && selectedImages[item.id] && (
-              <View style={styles.selectionOverlay}>
-                <Icon name="check-circle" size={30} color="#3498db" />
-              </View>
-            )}
-          </TouchableOpacity>
-        )}
-        contentContainerStyle={styles.imageGrid}
-        ListEmptyComponent={() => (
-          <View style={styles.emptyGalleryContainer}>
-            <Icon name="image-off" size={60} color="#999" />
-            <Text style={styles.emptyGalleryText}>{emptyMessage}</Text>
-            <Text style={styles.emptyGallerySubText}>
-              {/* Conditional sub-text based on whether it's the main gallery or trash */}
-              {data === pictures ? 'Tap "Add Photo" to get started!' : 'Deleted items will appear here.'}
+            <Icon name="image-off" size={40} color="#fff" />
+            <Text style={{ color: '#fff', marginTop: 5, fontWeight: 'bold' }}>
+              Failed
             </Text>
+          </LinearGradient>
+        ) : (
+          <Image
+            source={{ uri: localURI }}
+            style={styles.image}
+            onError={() =>
+              setErrorImages((prev) => ({ ...prev, [item.id]: true }))
+            }
+          />
+        )}
+
+        {selectionMode && selectedImages[item.id] && (
+          <View style={styles.selectionOverlay}>
+            <Icon name="check-circle" size={30} color="#3498db" />
           </View>
         )}
-      />
+      </TouchableOpacity>
     );
-  }, [handleImagePress, handleImageLongPress, selectedImages, selectionMode, pictures]); // Include 'pictures' to differentiate empty message logic
+  };
 
+  const keyExtractor = (item) => item.id;
 
   const renderMainContent = () => {
     switch (activeScreen) {
@@ -143,108 +219,68 @@ export default function GalleryScreen() {
           <View style={styles.contentSection}>
             <View style={styles.headerRow}>
               <Text style={styles.sectionTitle}>All Pictures</Text>
-              {selectionMode && Object.keys(selectedImages).length > 0 ? (
-                <TouchableOpacity
-                  style={styles.actionButton}
-                  onPress={handleDelete} //calls the memoized handler
-                  activeOpacity={0.7}
-                >
-                  <Icon name="delete" size={25} color="#e74c3c" />
-                  <Text style={styles.actionButtonText}>
-                    Delete ({Object.keys(selectedImages).length})
-                  </Text>
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity
-                  style={styles.uploadButton}
-                  onPress={() => {
-                    console.log('Add Photo button pressed');
-                    const newId = String(pictures.length + trashPictures.length + 1);
-                    const newImage = {
-                      id: newId,
-                      uri: `https://picsum.photos/seed/${Math.random()}/200/200`,
-                      title: `New Image ${newId}`,
-                      dateAdded: new Date().toISOString(), //add dateAdded for sorting
-                    };
-                    setPictures(prev => sortImagesByDate([...prev, newImage])); //add and sort
-                  }}
-                  activeOpacity={0.7}
-                >
+              {!selectionMode ? (
+                <TouchableOpacity style={styles.uploadButton} onPress={handleAddPhoto} activeOpacity={0.7}>
                   <Icon name="plus-circle" size={25} color="#3498db" />
                   <Text style={styles.uploadButtonText}>Add Photo</Text>
                 </TouchableOpacity>
+              ) : (
+                <View style={styles.deleteContainer}>
+                  <TouchableOpacity
+                    disabled={Object.keys(selectedImages).length === 0}
+                    style={styles.actionButton}
+                    onPress={() => {
+                      Alert.alert(
+                        'Delete Photos',
+                        `Are you sure you want to delete ${Object.keys(selectedImages).length} photo(s)?`,
+                        [
+                          { text: 'Cancel', style: 'cancel' },
+                          {
+                            text: 'Delete',
+                            style: 'destructive',
+                            onPress: () => {
+                              Alert.alert('Delete', 'Feature to delete photos coming soon');
+                              setSelectedImages({});
+                              setSelectionMode(false);
+                            },
+                          },
+                        ]
+                      );
+                    }}
+                  >
+                    <Icon name="delete" size={25} color="#e74c3c" />
+                    <Text style={styles.actionButtonText}>
+                      Delete ({Object.keys(selectedImages).length})
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               )}
             </View>
 
-            {renderPictureGrid(pictures, 'No pictures found.')}
-
-            {/* Modal for full-screen image view */}
-            <Modal
-              animationType="fade"
-              transparent={true}
-              visible={modalVisible}
-              onRequestClose={() => {
-                setModalVisible(!modalVisible);
-                setCurrentImage(null);
-              }}
-            >
-              <View style={styles.fullScreenImageContainer}>
-                <TouchableOpacity
-                  style={styles.closeButton}
-                  onPress={() => {
-                    setModalVisible(false);
-                    setCurrentImage(null);
-                  }}
-                >
-                  <Icon name="close-circle" size={30} color="#fff" />
-                </TouchableOpacity>
-                {currentImage && (
-                  <Image
-                    source={{ uri: currentImage.uri }}
-                    style={styles.fullScreenImage}
-                    resizeMode="contain"
-                  />
-                )}
-                {currentImage && (
-                  <Text style={styles.fullScreenImageTitle}>
-                    {currentImage.title}
+            <FlatList
+              data={galleryPhotos}
+              keyExtractor={keyExtractor}
+              numColumns={3}
+              contentContainerStyle={styles.imageGrid}
+              renderItem={renderPhotoItem}
+              ListEmptyComponent={
+                <View style={styles.emptyGalleryContainer}>
+                  <Icon name="image-off" size={60} color="#999" />
+                  <Text style={styles.emptyGalleryText}>No pictures found.</Text>
+                  <Text style={styles.emptyGallerySubText}>
+                    Tap "Add Photo" to get started!
                   </Text>
-                )}
-              </View>
-            </Modal>
+                </View>
+              }
+            />
           </View>
         );
-
       case 'albums':
-        return <Albums />;
+        return <AlbumScreen />; // Render the dedicated AlbumScreen
       case 'stories':
-        return <Stories />;
-
+        return <StoriesScreen />; // Render the dedicated StoriesScreen
       case 'trash':
-        // tp pass necessary states and setters as props to Trash.js
-        return (
-          <Trash
-            trashPictures={trashPictures}
-            setTrashPictures={setTrashPictures}
-            pictures={pictures} //pass main pictures state for restore functionality
-            setPictures={setPictures} //pass main pictures setter for restore functionality
-            selectionMode={selectionMode}
-            setSelectionMode={setSelectionMode}
-            selectedImages={selectedImages}
-            setSelectedImages={setSelectedImages}
-            handleToggleSelection={handleToggleSelection} //pass the memoized handler
-            setModalVisible={setModalVisible}
-            setCurrentImage={setCurrentImage}
-            modalVisible={modalVisible}
-            currentImage={currentImage}
-            handleRestoreSelected={handleRestoreSelected} //pass the actual function from galleryFunctions
-            handlePermanentDelete={handlePermanentDelete} //pass the actual function from galleryFunctions
-            //pass the memoized image press handlers to Trash for consistency
-            handleImagePress={handleImagePress}
-            handleImageLongPress={handleImageLongPress}
-          />
-        );
-
+        return <TrashScreen />;   // Render the dedicated TrashScreen
       default:
         return (
           <View style={styles.contentSection}>
@@ -263,21 +299,43 @@ export default function GalleryScreen() {
         {/* Main Content Area */}
         <View style={styles.mainContentArea}>{renderMainContent()}</View>
 
+        {/* Modal for full screen image preview */}
+        <Modal
+          animationType="fade"
+          transparent={true}
+          visible={modalVisible}
+          onRequestClose={() => setModalVisible(false)}
+        >
+          <View style={styles.fullScreenImageContainer}>
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={() => setModalVisible(false)}
+            >
+              <Icon name="close-circle" size={30} color="#fff" />
+            </TouchableOpacity>
+            {currentImage && (
+              <Image
+                source={{ uri: getImageUri(currentImage) }}
+                style={styles.fullScreenImage}
+                resizeMode="contain"
+              />
+            )}
+            {currentImage && (
+              <Text style={styles.fullScreenImageTitle}>{currentImage.imageId}</Text>
+            )}
+          </View>
+        </Modal>
+
         {/* Bottom Navigation Bar */}
         <View style={styles.bottomNavContainer}>
-          {navItems.map((item) => (
+          {navItems.map(item => (
             <TouchableOpacity
               key={item.name}
               style={[
                 styles.bottomNavItem,
                 activeScreen === item.name && styles.bottomNavItemActive,
               ]}
-              //on navigation change, clear selection mode and selected images
-              onPress={() => {
-                setActiveScreen(item.name);
-                setSelectionMode(false);
-                setSelectedImages({});
-              }}
+              onPress={() => setActiveScreen(item.name)}
               activeOpacity={0.8}
             >
               <Icon
@@ -308,25 +366,13 @@ const styles = StyleSheet.create({
   },
   container: {
     flex: 1,
-    // The main content area uses absolute positioning, so the container doesn't need flex: 1
-    // if its only child is absolutely positioned, but it doesn't hurt
+    paddingBottom: 70, // Add padding to the bottom of the container to make space for the nav bar
   },
   mainContentArea: {
     flex: 1,
-    borderWidth: 1,
-    borderColor: '#a0a0a0',
-    borderTopColor: 'transparent',
-    borderBottomColor: 'transparent',
     backgroundColor: '#f2f2f2',
     paddingHorizontal: 16,
     paddingVertical: 20,
-    paddingBottom: 75,
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    zIndex: 1, 
   },
   contentSection: {
     flex: 1,
@@ -334,7 +380,8 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#333',
+    marginBottom: 20,
+    color: '#333'
   },
   placeholderText: {
     fontSize: 16,
@@ -342,23 +389,21 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 20,
   },
-  //Style for the FlatList content container
   imageGrid: {
     justifyContent: 'center',
     alignItems: 'center',
-    paddingBottom: 15,
-    flexGrow: 1,
+    paddingBottom: 20,
   },
   imageWrapper: {
     borderRadius: 8,
     overflow: 'hidden',
     backgroundColor: '#f0f0f0',
-    position: 'relative', 
+    position: 'relative',
   },
   image: {
     width: '100%',
     height: '100%',
-    resizeMode: 'cover', 
+    resizeMode: 'cover',
   },
   selectionOverlay: {
     position: 'absolute',
@@ -367,33 +412,36 @@ const styles = StyleSheet.create({
     width: 30,
     height: 30,
     borderRadius: 15,
-    backgroundColor: 'rgba(255, 255, 255, 0.7)', //semi-transparent white circle
+    backgroundColor: 'rgba(255, 255, 255, 0.7)',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  //Styles for the bottom navigation bar
+  imageSelected: {
+    borderWidth: 2,
+    borderColor: '#3498db',
+  },
   bottomNavContainer: {
     flexDirection: 'row',
     justifyContent: 'space-around',
     alignItems: 'center',
-    height: 70, // Fixed height for the nav bar
+    height: 70,
     borderTopWidth: 1,
     borderTopColor: '#ccc',
     backgroundColor: '#f0f0f0',
-    paddingBottom: Platform.OS === 'ios' ? 24 : 10, //adjust padding for iOS safe area
+    paddingBottom: Platform.OS === 'ios' ? 24 : 10,
     paddingTop: 8,
-    position: 'absolute', //positionaing at the bottom
+    position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
-    zIndex: 10, //ensure it's above other content
+    zIndex: 10,
     borderWidth: 1,
     borderColor: '#e0e0e0',
-    shadowColor: '#000', //subtle shadow for depth
+    shadowColor: '#000',
     shadowOffset: { width: 0, height: -1 },
     shadowOpacity: 0.05,
     shadowRadius: 5,
-    elevation: 8, //android shadow
+    elevation: 8,
   },
   bottomNavItem: {
     flex: 1,
@@ -407,10 +455,9 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   bottomNavTextActive: {
-    color: '#3498db', //blue for active tab text
+    color: '#3498db',
     fontWeight: 'bold',
   },
-  //Styles for the header row  "All Pictures" and "Add Photo" buttons
   headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -427,10 +474,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginLeft: 6,
   },
+  deleteContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   actionButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginHorizontal: 5, 
   },
   actionButtonText: {
     color: '#e74c3c',
@@ -438,10 +488,25 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginLeft: 6,
   },
-  //Styles for the full-screen image modal
+  emptyGalleryContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 100,
+  },
+  emptyGalleryText: {
+    fontSize: 20,
+    color: '#666',
+    fontWeight: 'bold',
+    marginTop: 10,
+  },
+  emptyGallerySubText: {
+    fontSize: 14,
+    color: '#888',
+    marginTop: 5,
+  },
   fullScreenImageContainer: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.9)', 
+    backgroundColor: 'rgba(0, 0, 0, 0.95)',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -453,7 +518,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: Platform.OS === 'ios' ? 50 : 20,
     right: 20,
-    zIndex: 100, 
+    zIndex: 100,
   },
   fullScreenImageTitle: {
     color: '#fff',
@@ -461,22 +526,8 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginTop: 10,
   },
-  // Styles for empty gallery state
-  emptyGalleryContainer: {
-    flex: 1,
+  fallbackGradient: {
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 50,
-  },
-  emptyGalleryText: {
-    fontSize: 20,
-    color: '#666',
-    marginTop: 10,
-    fontWeight: 'bold',
-  },
-  emptyGallerySubText: {
-    fontSize: 14,
-    color: '#888',
-    marginTop: 5,
   },
 });
